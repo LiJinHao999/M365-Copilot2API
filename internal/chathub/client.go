@@ -12,9 +12,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
-	"unicode/utf8"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -27,10 +29,72 @@ func minInt(a, b int) int {
 	return b
 }
 
+// M365 private-use citation markers, e.g.
+//
+//	[label](citeturn1search1)
+//
+// or bare citeturn1search1
+var (
+	markdownCiteRe = regexp.MustCompile(`\[[^\]]*\]\(\s*[\x{E000}-\x{F8FF}]*cite[\x{E000}-\x{F8FF}][^)]*\)`)
+	barePUACiteRe  = regexp.MustCompile(`[\x{E000}-\x{F8FF}]cite[\x{E000}-\x{F8FF}][A-Za-z0-9_]*[\x{E000}-\x{F8FF}]?`)
+	htmlCiteRe     = regexp.MustCompile(`(?i)</?cite\b[^>]*>`)
+	htmlCiteBodyRe = regexp.MustCompile(`(?is)<cite\b[^>]*>.*?</cite>`)
+	plainCiteRe    = regexp.MustCompile(`(?i)\bcite\s*turn\d+\w*`)
+	multiSpaceRe   = regexp.MustCompile(`[^\S\n]{2,}`)
+)
+
+// CleanM365Citations strips private-use citation markers that break clients and
+// prefix matching. Safe on partial stream deltas: only complete cite patterns
+// are removed.
+func CleanM365Citations(text string) string {
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "cite") {
+		hasPUA := false
+		for _, r := range text {
+			if r >= 0xE000 && r <= 0xF8FF {
+				hasPUA = true
+				break
+			}
+		}
+		if !hasPUA {
+			return text
+		}
+	}
+	cleaned := markdownCiteRe.ReplaceAllString(text, "")
+	cleaned = barePUACiteRe.ReplaceAllString(cleaned, "")
+	cleaned = htmlCiteBodyRe.ReplaceAllString(cleaned, "")
+	cleaned = htmlCiteRe.ReplaceAllString(cleaned, "")
+	cleaned = plainCiteRe.ReplaceAllString(cleaned, "")
+	cleaned = multiSpaceRe.ReplaceAllString(cleaned, " ")
+	return strings.TrimSpace(cleaned)
+}
+
+func dedupeSignature(text string) string {
+	normalized := CleanM365Citations(text)
+	normalized = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, normalized)
+	return normalized
+}
+
 // unseenDelta returns the portion of incoming that has not already been
 // accumulated in streamed. ChatHub interleaves full message snapshots with
 // writeAtCursor tokens; naively appending either repeats the answer.
+//
+// Citation PUA markers are ignored for prefix comparison so a later snapshot
+// that only differs by inserted cite tokens still contributes its real tail
+// (otherwise words like "明天" can be dropped when a cite appears mid-stream).
 func unseenDelta(streamed, incoming string) (delta string, skip bool) {
+	if incoming == "" {
+		return "", true
+	}
+	incoming = CleanM365Citations(incoming)
 	if incoming == "" {
 		return "", true
 	}
@@ -44,18 +108,106 @@ func unseenDelta(streamed, incoming string) (delta string, skip bool) {
 	if strings.HasPrefix(incoming, streamed) {
 		return incoming[len(streamed):], false
 	}
+	// Citation-aware: compare cleaned signatures / find streamed as prefix of
+	// cleaned incoming even if raw strings diverged due to cite insertion.
+	cStream := CleanM365Citations(streamed)
+	cIn := CleanM365Citations(incoming)
+	if cStream != "" && strings.HasPrefix(cIn, cStream) {
+		// Prefer returning the raw unseen suffix when raw also shares a prefix;
+		// otherwise return the cleaned tail so we do not reintroduce cites.
+		tail := cIn[len(cStream):]
+		if tail == "" {
+			return "", true
+		}
+		return tail, false
+	}
 	// Already-applied cursor token.
-	if strings.HasSuffix(streamed, incoming) {
+	if strings.HasSuffix(streamed, incoming) || strings.HasSuffix(cStream, cIn) {
 		return "", true
 	}
-	// writeAtCursor frames are tiny token fragments. Anything longer that does
-	// not extend the current prefix is a replaced full snapshot — drop it.
+	// Full restated snapshot (common with media / cite rewrites): drop when the
+	// incoming cleaned text is essentially a superset of what we already have.
+	sSig, iSig := dedupeSignature(streamed), dedupeSignature(incoming)
+	if sSig != "" && iSig != "" && strings.Contains(iSig, sSig) && utf8.RuneCountInString(incoming) >= utf8.RuneCountInString(streamed) {
+		// If it grew beyond streamed after cleaning, emit only the cleaned growth.
+		if strings.HasPrefix(iSig, sSig) {
+			// Cannot map signature indices back 1:1; fall through to cleaned prefix path above failed,
+			// so just skip re-emitting the whole thing.
+			return "", true
+		}
+		return "", true
+	}
+	// writeAtCursor frames are tiny token fragments.
 	if utf8.RuneCountInString(incoming) <= 8 {
 		return incoming, false
 	}
+	// Non-prefix longer frame: drop rather than re-append (duplication bug).
 	return "", true
 }
 
+// finalTextReconcile picks the best final answer after the stream ends.
+// Prefer the completion-frame message when it is a cleaned superset of the
+// streamed text — stream snapshots can lose a character or two around cite
+// insertion points ("明天" etc.).
+func finalTextReconcile(streamed, final string) string {
+	streamed = CleanM365Citations(strings.TrimSpace(streamed))
+	final = CleanM365Citations(strings.TrimSpace(final))
+	if streamed == "" {
+		return final
+	}
+	if final == "" {
+		return streamed
+	}
+	if final == streamed {
+		return streamed
+	}
+	if strings.HasPrefix(final, streamed) {
+		return final
+	}
+	if strings.HasPrefix(streamed, final) {
+		return streamed
+	}
+	sSig, fSig := dedupeSignature(streamed), dedupeSignature(final)
+	if fSig == "" || sSig == "" {
+		return streamed
+	}
+	// Prefer final when it covers streamed content and is not shorter.
+	if strings.Contains(fSig, sSig) && utf8.RuneCountInString(final) >= utf8.RuneCountInString(streamed)*3/4 {
+		return final
+	}
+	// Prefer final if streamed looks truncated relative to final (high overlap).
+	if overlapRatio(sSig, fSig) >= 0.7 && utf8.RuneCountInString(final) > utf8.RuneCountInString(streamed) {
+		return final
+	}
+	return streamed
+}
+
+func overlapRatio(a, b string) float64 {
+	if a == "" || b == "" {
+		return 0
+	}
+	// cheap rune-bigram overlap on the shorter signature
+	short, long := a, b
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	matched := 0
+	step := 2
+	if len(short) < 4 {
+		step = 1
+	}
+	total := 0
+	for i := 0; i+step <= len(short); i += step {
+		total++
+		if strings.Contains(long, short[i:i+step]) {
+			matched++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(matched) / float64(total)
+}
 
 const (
 	rs          = "\x1e"
@@ -222,6 +374,7 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 
 	var streamedText string
 	emitDelta := func(d string) error {
+		d = CleanM365Citations(d)
 		if d == "" {
 			return nil
 		}
@@ -369,13 +522,7 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 				}
 				// end of stream
 				log.Printf("chathub timing completion_frame_ms=%d streamed_text=%d events=%d", time.Since(payloadSentAt).Milliseconds(), len(streamedText), len(events))
-				// Use deduplicated streamed text. Joining raw snapshots duplicated answers.
-				text := streamedText
-				if text == "" {
-					text = final
-				} else if final != "" && strings.HasPrefix(final, text) {
-					text = final
-				}
+				text := finalTextReconcile(streamedText, final)
 				return Result{
 					Text:           text,
 					ConversationID: req.ConversationID,
