@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,36 @@ func minInt(a, b int) int {
 	}
 	return b
 }
+
+// unseenDelta returns the portion of incoming that has not already been
+// accumulated in streamed. ChatHub interleaves full message snapshots with
+// writeAtCursor tokens; naively appending either repeats the answer.
+func unseenDelta(streamed, incoming string) (delta string, skip bool) {
+	if incoming == "" {
+		return "", true
+	}
+	if streamed == "" {
+		return incoming, false
+	}
+	if incoming == streamed {
+		return "", true
+	}
+	// Growing full snapshot (most common ChatHub pattern).
+	if strings.HasPrefix(incoming, streamed) {
+		return incoming[len(streamed):], false
+	}
+	// Already-applied cursor token.
+	if strings.HasSuffix(streamed, incoming) {
+		return "", true
+	}
+	// writeAtCursor frames are tiny token fragments. Anything longer that does
+	// not extend the current prefix is a replaced full snapshot — drop it.
+	if utf8.RuneCountInString(incoming) <= 8 {
+		return incoming, false
+	}
+	return "", true
+}
+
 
 const (
 	rs          = "\x1e"
@@ -189,7 +220,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 		return Result{}, fmt.Errorf("chat send: %w", err)
 	}
 
-	var deltas []string
 	var streamedText string
 	emitDelta := func(d string) error {
 		if d == "" {
@@ -204,14 +234,16 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 		}
 		return nil
 	}
+	// emitSnapshot keeps only the unseen suffix of ChatHub snapshots/deltas.
 	emitSnapshot := func(snapshot string) error {
-		if snapshot == "" {
+		delta, skip := unseenDelta(streamedText, snapshot)
+		if skip {
+			if snapshot != "" && snapshot != streamedText && !strings.HasPrefix(snapshot, streamedText) && len(snapshot) >= 64 {
+				log.Printf("chathub stream skip non-prefix snapshot len=%d streamed=%d", len(snapshot), len(streamedText))
+			}
 			return nil
 		}
-		if streamedText != "" && strings.HasPrefix(snapshot, streamedText) {
-			return emitDelta(strings.TrimPrefix(snapshot, streamedText))
-		}
-		return emitDelta(snapshot)
+		return emitDelta(delta)
 	}
 	var final string
 	var throttling any
@@ -286,7 +318,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 						}
 					}
 					if w, ok := arg["writeAtCursor"].(string); ok && w != "" && !toolFrame {
-						deltas = append(deltas, w)
 						if err := emitSnapshot(w); err != nil {
 							return Result{}, err
 						}
@@ -304,9 +335,7 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 							text, _ := m["text"].(string)
 							mt, _ := m["messageType"].(string)
 							if author == "bot" && mt == "" && text != "" {
-								// ChatHub often sends the first visible text as a full snapshot,
-								// followed by cursor deltas. Emit only the unseen suffix.
-								deltas = append(deltas, text)
+								// Reduce full bot snapshots to the unseen suffix only.
 								if err := emitSnapshot(text); err != nil {
 									return Result{}, err
 								}
@@ -340,9 +369,12 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 				}
 				// end of stream
 				log.Printf("chathub timing completion_frame_ms=%d streamed_text=%d events=%d", time.Since(payloadSentAt).Milliseconds(), len(streamedText), len(events))
-				text := final
+				// Use deduplicated streamed text. Joining raw snapshots duplicated answers.
+				text := streamedText
 				if text == "" {
-					text = strings.Join(deltas, "")
+					text = final
+				} else if final != "" && strings.HasPrefix(final, text) {
+					text = final
 				}
 				return Result{
 					Text:           text,
