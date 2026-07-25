@@ -57,6 +57,16 @@ func TestModelMappingsValidate(t *testing.T) {
 	if err := validateSettings(v); err != nil {
 		t.Fatalf("rejected custom public model: %v", err)
 	}
+	v.ModelMappings = []modelMapping{
+		{PublicModel: "", UpstreamTone: "Claude_Fable", DisplayName: "blank", DefaultReasoningLevel: "medium"},
+		{PublicModel: "claude-fable-5", UpstreamTone: "Claude_Fable", DisplayName: "Claude Fable 5", DefaultReasoningLevel: "medium"},
+	}
+	if err := validateSettings(v); err != nil {
+		t.Fatalf("blank mapping rows should be ignored: %v", err)
+	}
+	if got := sanitizeModelMappings(v.ModelMappings); len(got) != 1 || got[0].PublicModel != "claude-fable-5" {
+		t.Fatalf("sanitize=%#v", got)
+	}
 }
 
 func TestOutboundProxySettingValidation(t *testing.T) {

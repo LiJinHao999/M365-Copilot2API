@@ -27,7 +27,8 @@ var defaultModelMappings = []modelMapping{
 	{PublicModel: "gpt-5.6-luna", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6-Luna", DefaultReasoningLevel: "medium"},
 }
 
-var publicModelID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+// Allow ASCII plus common CJK product labels (e.g. Copilot_自动) used as public IDs.
+var publicModelID = regexp.MustCompile(`^[\p{L}\p{N}._-]{1,128}$`)
 
 var configurableCodexModels = []string{
 	"gpt-5.2",
@@ -109,9 +110,46 @@ func openSettingsStore() *settingsStore {
 	if b, e := os.ReadFile(s.path); e == nil {
 		_ = json.Unmarshal(b, &s.v)
 	}
+	s.v.ModelMappings = sanitizeModelMappings(s.v.ModelMappings)
 	_ = validateSettings(s.v)
 	sharedSettings = s
 	return s
+}
+
+// sanitizeModelMappings drops blank/partial rows that would otherwise surface as
+// empty model ids in /v1/models.
+func sanitizeModelMappings(in []modelMapping) []modelMapping {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]modelMapping, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, m := range in {
+		id := strings.TrimSpace(m.PublicModel)
+		if id == "" {
+			continue
+		}
+		key := strings.ToLower(id)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if strings.TrimSpace(m.UpstreamTone) == "" || strings.TrimSpace(m.DisplayName) == "" {
+			continue
+		}
+		if _, err := normalizeReasoningEffort(m.DefaultReasoningLevel); err != nil || strings.TrimSpace(m.DefaultReasoningLevel) == "" {
+			continue
+		}
+		if !validUpstreamTone(strings.TrimSpace(m.UpstreamTone)) {
+			continue
+		}
+		m.PublicModel = id
+		m.UpstreamTone = strings.TrimSpace(m.UpstreamTone)
+		m.DisplayName = strings.TrimSpace(m.DisplayName)
+		m.DefaultReasoningLevel = strings.TrimSpace(m.DefaultReasoningLevel)
+		seen[key] = struct{}{}
+		out = append(out, m)
+	}
+	return out
 }
 func firstNonEmptySetting(values ...string) string {
 	for _, v := range values {
@@ -155,16 +193,25 @@ func validateSettings(v runtimeSettings) error {
 	seen := make(map[string]struct{}, len(v.ModelMappings))
 	for _, mapping := range v.ModelMappings {
 		model := strings.TrimSpace(mapping.PublicModel)
+		if model == "" {
+			// Ignore blank mapping rows left over from partial UI edits; they
+			// previously leaked into /v1/models as empty ids and crashed clients.
+			continue
+		}
 		if !publicModelID.MatchString(model) {
-			return fmt.Errorf("公开模型 ID 只能包含字母、数字、点、下划线或连字符，且长度为 1-128")
+			return fmt.Errorf("公开模型 ID 只能包含字母、数字、点、下划线、连字符或文字，且长度为 1-128")
 		}
 		key := strings.ToLower(model)
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("公开模型 ID %q 重复", model)
 		}
 		seen[key] = struct{}{}
-		if !validUpstreamTone(strings.TrimSpace(mapping.UpstreamTone)) {
-			return fmt.Errorf("上游 tone %q 不受支持", mapping.UpstreamTone)
+		tone := strings.TrimSpace(mapping.UpstreamTone)
+		if tone == "" {
+			return fmt.Errorf("公开模型 %q 缺少上游 tone", model)
+		}
+		if !validUpstreamTone(tone) {
+			return fmt.Errorf("上游 tone %q 不受支持", tone)
 		}
 		if strings.TrimSpace(mapping.DisplayName) == "" {
 			return fmt.Errorf("公开模型 %q 缺少显示名称", model)
@@ -175,8 +222,15 @@ func validateSettings(v runtimeSettings) error {
 	}
 	return nil
 }
-func (s *settingsStore) get() runtimeSettings { s.mu.RLock(); defer s.mu.RUnlock(); return s.v }
+func (s *settingsStore) get() runtimeSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := s.v
+	out.ModelMappings = sanitizeModelMappings(append([]modelMapping(nil), s.v.ModelMappings...))
+	return out
+}
 func (s *settingsStore) save(v runtimeSettings) error {
+	v.ModelMappings = sanitizeModelMappings(v.ModelMappings)
 	if e := validateSettings(v); e != nil {
 		return e
 	}

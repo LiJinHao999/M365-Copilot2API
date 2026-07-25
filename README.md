@@ -91,13 +91,23 @@ curl http://127.0.0.1:4141/v1/chat/completions \
 
 ## 🤖 可用模型
 
-| 模型 | 推荐用途 | 速度 |
-|------|---------|------|
-| `gpt-5.5` | 日常对话 | ⚡ ~5s |
-| `gpt-5.2` | 最轻量快速 | ⚡ ~5s |
-| `claude-sonnet` | 联网搜索、实时信息 | ⚡ ~5-6s |
-| `gpt-5.6-sol` | 复杂推理（默认高推理） | ⏳ ~7s |
-| `gpt-5.5-reasoning` | 数学/逻辑推理 | ⏳ ~9s |
+对外 `model` 会映射到 ChatHub 上游 `tone`。带 `-持续` 后缀的 ID 与普通 ID 走同一 tone（便于会话客户端区分持续线程）。
+
+| 上游 tone | 模型 ID | 持续模型 ID | 说明 |
+|-----------|---------|-------------|------|
+| `Magic` | `Copilot_自动` | `Copilot_自动-持续` | Copilot 自动选模 |
+| `Chat` | `Copilot_快速答复` | `Copilot_快速答复-持续` | Copilot 快速答复 |
+| `Reasoning` | `Copilot_深度思考` | `Copilot_深度思考-持续` | Copilot 深度思考 |
+| `Claude_Sonnet` | `claude-sonnet-4-6` | `claude-sonnet-4-6-持续` | Claude Sonnet |
+| `Claude_Sonnet_Reasoning` | `claude-sonnet-4-5_Reasoning` | `claude-sonnet-4-5_Reasoning-持续` | Claude Sonnet 思考 |
+| `Claude_Fable` | `claude-fable-5` | `claude-fable-5-持续` | Claude Fable |
+| `Gpt_5_6_Reasoning` | `gpt-5.6_Reasoning` | `gpt-5.6_Reasoning-持续` | GPT 5.6 思考 |
+| `Gpt_5_5_Chat` | `gpt-5.5_Chat` | `gpt-5.5_Chat-持续` | GPT 5.5 快速 |
+| `Gpt_5_5_Reasoning` | `gpt-5.5_Reasoning` | `gpt-5.5_Reasoning-持续` | GPT 5.5 思考 |
+| `Gpt_5_2_Chat` | `gpt-5.2_Chat` | `gpt-5.2_Chat-持续` | GPT 5.2 快速 |
+| `Gpt_5_2_Reasoning` | `gpt-5.2_Reasoning` | `gpt-5.2_Reasoning-持续` | GPT 5.2 思考 |
+
+仍兼容旧短名：`gpt-5.5`、`claude-sonnet`、`claude-fable`、`gpt-5.6-sol` 等。
 
 ## 🧩 MCP 协议
 

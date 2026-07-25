@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -150,8 +151,118 @@ func TestConfiguredModelMappingsDriveCatalogAndRouting(t *testing.T) {
 		t.Fatalf("tone=%q ok=%t", tone, ok)
 	}
 	override := configuredModelSpecs([]modelMapping{{PublicModel: "gpt-5.5", UpstreamTone: "Gpt_5_5_Reasoning", DisplayName: "GPT-5.5", DefaultReasoningLevel: "high"}})
-	if len(override) != len(gatewayModels) || override[5].DefaultReasoningLevel != "high" {
-		t.Fatalf("built-in override=%#v", override)
+	if len(override) != len(gatewayModels) {
+		t.Fatalf("built-in override length=%d want=%d", len(override), len(gatewayModels))
+	}
+	found := false
+	for _, m := range override {
+		if m.ID == "gpt-5.5" {
+			found = true
+			if m.DefaultReasoningLevel != "high" || m.DisplayName != "GPT-5.5" {
+				t.Fatalf("built-in override=%#v", m)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("gpt-5.5 override missing")
+	}
+}
+
+func TestConfiguredModelSpecsSkipsEmptyPublicModel(t *testing.T) {
+	models := configuredModelSpecs([]modelMapping{
+		{PublicModel: "", UpstreamTone: "Claude_Fable", DisplayName: "bad", DefaultReasoningLevel: "medium"},
+		{PublicModel: "   ", UpstreamTone: "Claude_Fable", DisplayName: "bad2", DefaultReasoningLevel: "medium"},
+		{PublicModel: "claude-fable-custom", UpstreamTone: "Claude_Fable", DisplayName: "Fable Custom", DefaultReasoningLevel: "medium"},
+	})
+	if len(models) != len(gatewayModels)+1 {
+		t.Fatalf("len=%d want=%d models=%#v", len(models), len(gatewayModels)+1, models)
+	}
+	for _, m := range models {
+		if strings.TrimSpace(m.ID) == "" {
+			t.Fatalf("empty model id leaked: %#v", m)
+		}
+	}
+	last := models[len(models)-1]
+	if last.ID != "claude-fable-custom" {
+		t.Fatalf("last=%#v", last)
+	}
+}
+
+func TestModelToneSupportsFableAndProductAliases(t *testing.T) {
+	cases := map[string]string{
+		"claude-fable-5":                 "Claude_Fable",
+		"claude-fable-5-持续":              "Claude_Fable",
+		"Claude_Fable":                   "Claude_Fable",
+		"claude-sonnet-4-6":              "Claude_Sonnet",
+		"claude-sonnet-4-6-持续":           "Claude_Sonnet",
+		"claude-sonnet-4-5_Reasoning":    "Claude_Sonnet_Reasoning",
+		"claude-sonnet-4-5_Reasoning-持续": "Claude_Sonnet_Reasoning",
+		"gpt-5.5_Chat":                   "Gpt_5_5_Chat",
+		"gpt-5.5_Chat-持续":                "Gpt_5_5_Chat",
+		"gpt-5.6_Reasoning":              "Gpt_5_6_Reasoning",
+		"Copilot_自动":                     "Magic",
+		"Copilot_自动-持续":                  "Magic",
+		"Copilot_快速答复":                   "Chat",
+		"Copilot_深度思考":                   "Reasoning",
+		"Magic":                          "Magic",
+		"Chat":                           "Chat",
+		"Reasoning":                      "Reasoning",
+	}
+	for model, want := range cases {
+		if got := modelTone(model); got != want {
+			t.Fatalf("modelTone(%q)=%q want %q", model, got, want)
+		}
+	}
+}
+
+func TestOpenAIModelsOmitsEmptyIDs(t *testing.T) {
+	// Simulate a corrupted in-memory settings row with a blank public model.
+	st := &settingsStore{
+		path: filepath.Join(t.TempDir(), "settings.json"),
+		v: runtimeSettings{
+			MaxToolCallsPerTurn: 1,
+			MaxToolRounds:       16,
+			ContextWindow:       128000,
+			MaxOutputTokens:     16384,
+			ChatTimeoutSeconds:  120,
+			ImageTimeoutSeconds: 150,
+			LogLevel:            "info",
+			ModelMappings: []modelMapping{
+				{PublicModel: "", UpstreamTone: "Claude_Fable", DisplayName: "blank", DefaultReasoningLevel: "medium"},
+				{PublicModel: "claude-fable-ok", UpstreamTone: "Claude_Fable", DisplayName: "Fable OK", DefaultReasoningLevel: "medium"},
+			},
+			ToolPlanningMode: "router",
+		},
+	}
+	prev := sharedSettings
+	sharedSettings = st
+	t.Cleanup(func() { sharedSettings = prev })
+
+	s := &Server{settings: st}
+	r := httptest.NewRequest("GET", "/v1/models", nil)
+	w := httptest.NewRecorder()
+	s.openaiModels(w, r)
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) == 0 {
+		t.Fatal("empty catalog")
+	}
+	foundCustom := false
+	for _, m := range body.Data {
+		id, _ := m["id"].(string)
+		if strings.TrimSpace(id) == "" {
+			t.Fatalf("empty id in catalog: %#v", m)
+		}
+		if id == "claude-fable-ok" {
+			foundCustom = true
+		}
+	}
+	if !foundCustom {
+		t.Fatal("expected claude-fable-ok in catalog")
 	}
 }
 
@@ -159,9 +270,12 @@ func TestReasoningEffortRouting(t *testing.T) {
 	cases := []struct{ model, effort, want string }{
 		{"claude-sonnet", "none", "Claude_Sonnet"},
 		{"claude-sonnet", "high", "Claude_Sonnet_Reasoning"},
+		{"claude-fable-5", "high", "Claude_Fable"},
 		{"gpt-5.5", "low", "Gpt_5_5_Chat"},
 		{"gpt-5.5", "medium", "Gpt_5_5_Reasoning"},
 		{"gpt-5.6-reasoning", "none", "Gpt_5_6_Reasoning"},
+		{"Copilot_自动", "high", "Reasoning"},
+		{"claude-sonnet-4-6-持续", "none", "Claude_Sonnet"},
 	}
 	for _, tc := range cases {
 		got, err := reasoningTone(tc.model, tc.effort)

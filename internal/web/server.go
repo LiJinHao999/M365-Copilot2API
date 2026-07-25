@@ -513,38 +513,80 @@ type responseFormat struct {
 	JSONSchema map[string]any `json:"json_schema,omitempty"`
 }
 
+// stripContinuousModelSuffix removes the "-持续" / "-continuous" session alias
+// suffix so persistent and one-shot model IDs share the same upstream tone.
+func stripContinuousModelSuffix(model string) string {
+	model = strings.TrimSpace(model)
+	lower := strings.ToLower(model)
+	for _, suffix := range []string{"-持续", "_持续", "-continuous", "_continuous", "-persist", "_persist"} {
+		ls := strings.ToLower(suffix)
+		if strings.HasSuffix(model, suffix) || strings.HasSuffix(lower, ls) {
+			return strings.TrimSpace(model[:len(model)-len(suffix)])
+		}
+	}
+	return model
+}
+
 func modelTone(model string) string {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gpt-5.2":
+	raw := strings.TrimSpace(model)
+	normalized := stripContinuousModelSuffix(raw)
+	key := strings.ToLower(normalized)
+	// Keep original CJK product names for exact matching.
+	switch normalized {
+	case "Copilot_自动", "Copilot-自动":
+		return "Magic"
+	case "Copilot_快速答复", "Copilot-快速答复":
+		return "Chat"
+	case "Copilot_深度思考", "Copilot-深度思考":
+		return "Reasoning"
+	}
+	switch key {
+	case "magic", "copilot_auto", "copilot-auto", "copilot自动", "auto":
+		return "Magic"
+	case "chat", "copilot_fast", "copilot-fast", "copilot快速答复", "fast":
+		return "Chat"
+	case "reasoning", "copilot_deep", "copilot-deep", "copilot深度思考", "deep", "think-deeper":
+		return "Reasoning"
+	case "gpt-5.2", "gpt-5.2_chat", "gpt-5.2-chat":
 		return "Gpt_5_2_Chat"
-	case "gpt-5.2-reasoning":
+	case "gpt-5.2-reasoning", "gpt-5.2_reasoning":
 		return "Gpt_5_2_Reasoning"
 	case "gpt-5.3":
 		return "Gpt_5_3_Chat"
-	case "gpt-5.4":
+	case "gpt-5.4", "gpt-5.4-quick":
 		return "Gpt_5_4_Chat"
-	case "gpt-5.4-reasoning":
+	case "gpt-5.4-reasoning", "gpt-5.4_reasoning":
 		return "Gpt_5_4_Reasoning"
-	case "gpt-5.5":
+	case "gpt-5.5", "gpt-5.5_chat", "gpt-5.5-chat":
 		return "Gpt_5_5_Chat"
-	case "gpt-5.5-reasoning":
+	case "gpt-5.5-reasoning", "gpt-5.5_reasoning":
 		return "Gpt_5_5_Reasoning"
-	case "gpt-5.6-reasoning":
+	case "gpt-5.6-reasoning", "gpt-5.6_reasoning", "gpt-5.6":
 		return "Gpt_5_6_Reasoning"
-	case "claude", "claude-sonnet":
+	case "claude", "claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "claude-sonnet4.6", "claude-sonnet-4-5":
 		return "Claude_Sonnet"
-	case "claude-sonnet-reasoning":
+	case "claude-sonnet-reasoning", "claude-sonnet-4-5_reasoning", "claude-sonnet-4-5-reasoning", "claude-sonnet_reasoning":
 		return "Claude_Sonnet_Reasoning"
-	case "gpt-5.4-quick":
-		return "Gpt_5_4_Chat"
+	case "claude-fable", "claude-fable-5", "claude-fable5", "fable", "fable-5":
+		return "Claude_Fable"
 	case "gpt-5.3-think-deeper":
 		return "Gpt_5_3_Chat"
 	case "quick":
 		return "Gpt_Quick"
-	case "think-deeper":
-		return "Gpt_Reasoning"
 	default:
-		return "magic"
+		// Accept raw upstream tones if a client already speaks ChatHub IDs.
+		switch normalized {
+		case "Magic", "Chat", "Reasoning",
+			"Gpt_5_2_Chat", "Gpt_5_2_Reasoning",
+			"Gpt_5_3_Chat", "Gpt_5_3_Reasoning",
+			"Gpt_5_4_Chat", "Gpt_5_4_Reasoning",
+			"Gpt_5_5_Chat", "Gpt_5_5_Reasoning",
+			"Gpt_5_6_Reasoning",
+			"Gpt_Quick", "Gpt_Reasoning",
+			"Claude_Sonnet", "Claude_Sonnet_Reasoning", "Claude_Fable":
+			return normalized
+		}
+		return "Magic"
 	}
 }
 
@@ -626,10 +668,23 @@ func (s *Server) openaiModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	data := modelCatalog()
+	raw := modelCatalog()
+	data := make([]map[string]any, 0, len(raw))
 	created := time.Now().Unix()
-	for _, model := range data {
+	for _, model := range raw {
+		id, _ := model["id"].(string)
+		if strings.TrimSpace(id) == "" {
+			// Never advertise blank model entries; several clients crash on empty id.
+			continue
+		}
 		model["created"] = created
+		if slug, _ := model["slug"].(string); strings.TrimSpace(slug) == "" {
+			model["slug"] = id
+		}
+		if display, _ := model["display_name"].(string); strings.TrimSpace(display) == "" {
+			model["display_name"] = id
+		}
+		data = append(data, model)
 	}
 	// Codex v0.144.5 requires `models`, while OpenAI-compatible clients use
 	// `data`. Keep both aliases backed by the same catalog.

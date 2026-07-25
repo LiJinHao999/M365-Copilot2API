@@ -53,6 +53,35 @@ func codexModelMessages() map[string]any {
 }
 
 var gatewayModels = []modelSpec{
+	// Copilot product tones
+	{ID: "Copilot_自动", Owner: "microsoft-365", DisplayName: "Copilot 自动", Tools: true},
+	{ID: "Copilot_自动-持续", Owner: "microsoft-365", DisplayName: "Copilot 自动（持续）", Tools: true},
+	{ID: "Copilot_快速答复", Owner: "microsoft-365", DisplayName: "Copilot 快速答复", Tools: true},
+	{ID: "Copilot_快速答复-持续", Owner: "microsoft-365", DisplayName: "Copilot 快速答复（持续）", Tools: true},
+	{ID: "Copilot_深度思考", Owner: "microsoft-365", DisplayName: "Copilot 深度思考", Tools: true},
+	{ID: "Copilot_深度思考-持续", Owner: "microsoft-365", DisplayName: "Copilot 深度思考（持续）", Tools: true},
+
+	// Claude via M365
+	{ID: "claude-sonnet-4-6", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet 4.6", Tools: true},
+	{ID: "claude-sonnet-4-6-持续", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet 4.6（持续）", Tools: true},
+	{ID: "claude-sonnet-4-5_Reasoning", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet Reasoning", Tools: true},
+	{ID: "claude-sonnet-4-5_Reasoning-持续", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet Reasoning（持续）", Tools: true},
+	{ID: "claude-fable-5", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Fable 5", Tools: true},
+	{ID: "claude-fable-5-持续", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Fable 5（持续）", Tools: true},
+
+	// GPT family (versioned public IDs)
+	{ID: "gpt-5.6_Reasoning", Owner: "microsoft-365", DisplayName: "GPT-5.6 Reasoning", Tools: true},
+	{ID: "gpt-5.6_Reasoning-持续", Owner: "microsoft-365", DisplayName: "GPT-5.6 Reasoning（持续）", Tools: true},
+	{ID: "gpt-5.5_Chat", Owner: "microsoft-365", DisplayName: "GPT-5.5 Chat", Tools: true},
+	{ID: "gpt-5.5_Chat-持续", Owner: "microsoft-365", DisplayName: "GPT-5.5 Chat（持续）", Tools: true},
+	{ID: "gpt-5.5_Reasoning", Owner: "microsoft-365", DisplayName: "GPT-5.5 Reasoning", Tools: true},
+	{ID: "gpt-5.5_Reasoning-持续", Owner: "microsoft-365", DisplayName: "GPT-5.5 Reasoning（持续）", Tools: true},
+	{ID: "gpt-5.2_Chat", Owner: "microsoft-365", DisplayName: "GPT-5.2 Chat", Tools: true},
+	{ID: "gpt-5.2_Chat-持续", Owner: "microsoft-365", DisplayName: "GPT-5.2 Chat（持续）", Tools: true},
+	{ID: "gpt-5.2_Reasoning", Owner: "microsoft-365", DisplayName: "GPT-5.2 Reasoning", Tools: true},
+	{ID: "gpt-5.2_Reasoning-持续", Owner: "microsoft-365", DisplayName: "GPT-5.2 Reasoning（持续）", Tools: true},
+
+	// Backward-compatible short aliases
 	{ID: "gpt-5.2", Owner: "microsoft-365", Tools: true},
 	{ID: "gpt-5.2-reasoning", Owner: "microsoft-365", Tools: true},
 	{ID: "gpt-5.3", Owner: "microsoft-365", Tools: true},
@@ -63,6 +92,7 @@ var gatewayModels = []modelSpec{
 	{ID: "gpt-5.6-reasoning", Owner: "microsoft-365", Tools: true},
 	{ID: "claude-sonnet", Owner: "anthropic-via-microsoft-365", Tools: true},
 	{ID: "claude-sonnet-reasoning", Owner: "anthropic-via-microsoft-365", Tools: true},
+	{ID: "claude-fable", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Fable", Tools: true},
 }
 
 func validUpstreamTone(tone string) bool {
@@ -75,7 +105,18 @@ func validUpstreamTone(tone string) bool {
 }
 
 func knownUpstreamTones() []string {
-	return []string{"Gpt_5_2_Chat", "Gpt_5_2_Reasoning", "Gpt_5_3_Chat", "Gpt_5_4_Chat", "Gpt_5_4_Reasoning", "Gpt_5_5_Chat", "Gpt_5_5_Reasoning", "Gpt_5_6_Reasoning", "Gpt_Quick", "Gpt_Reasoning", "Claude_Sonnet", "Claude_Sonnet_Reasoning"}
+	return []string{
+		"Magic", "Chat", "Reasoning",
+		"Gpt_5_2_Chat", "Gpt_5_2_Reasoning",
+		"Gpt_5_3_Chat", "Gpt_5_3_Reasoning",
+		"Gpt_5_4_Chat", "Gpt_5_4_Reasoning",
+		"Gpt_5_5_Chat", "Gpt_5_5_Reasoning",
+		"Gpt_5_6_Reasoning",
+		"Gpt_Quick", "Gpt_Reasoning",
+		"Claude_Sonnet", "Claude_Sonnet_Reasoning", "Claude_Fable",
+		// legacy lowercase defaults still accepted from older clients/settings
+		"magic",
+	}
 }
 
 func configuredModelMapping(model string, mappings []modelMapping) (modelMapping, bool) {
@@ -97,11 +138,29 @@ func configuredModelTone(model string, mappings []modelMapping) (string, bool) {
 }
 
 func configuredModelSpecs(mappings []modelMapping) []modelSpec {
-	models := append([]modelSpec(nil), gatewayModels...)
+	models := make([]modelSpec, 0, len(gatewayModels)+len(mappings))
+	for _, m := range gatewayModels {
+		id := strings.TrimSpace(m.ID)
+		if id == "" {
+			continue
+		}
+		m.ID = id
+		models = append(models, m)
+	}
 	for _, mapping := range mappings {
+		id := strings.TrimSpace(mapping.PublicModel)
+		if id == "" {
+			// Empty public model IDs break OpenAI-compatible clients that assume
+			// every catalog entry has a non-empty id. Skip them instead of
+			// advertising a blank model.
+			continue
+		}
 		spec := modelSpec{
-			ID: strings.TrimSpace(mapping.PublicModel), Owner: "microsoft-365", Tools: true,
+			ID: id, Owner: "microsoft-365", Tools: true,
 			DisplayName: strings.TrimSpace(mapping.DisplayName), DefaultReasoningLevel: strings.TrimSpace(mapping.DefaultReasoningLevel),
+		}
+		if spec.DisplayName == "" {
+			spec.DisplayName = id
 		}
 		replaced := false
 		for i := range models {
@@ -157,26 +216,35 @@ func reasoningTone(model, effort string) (string, error) {
 		return tone, nil
 	}
 	base := modelTone(model)
-	// Explicit reasoning aliases are never silently downgraded by a generic client default.
-	if strings.Contains(strings.ToLower(model), "reasoning") {
+	rawModel := strings.TrimSpace(model)
+	normalized := strings.ToLower(stripContinuousModelSuffix(rawModel))
+	// Explicit reasoning / fable routes are never silently downgraded by a client default.
+	if strings.Contains(normalized, "reasoning") ||
+		strings.Contains(rawModel, "深度思考") || strings.Contains(normalized, "深度思考") ||
+		normalized == "claude-fable" || normalized == "claude-fable-5" ||
+		normalized == "claude-fable5" || base == "Claude_Fable" || base == "Reasoning" {
 		return base, nil
 	}
 	if e == "" || e == "none" || e == "minimal" || e == "low" {
 		return base, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "claude", "claude-sonnet":
+	// Medium+ effort upgrades chat/auto product routes onto the deep-think tone.
+	if base == "Magic" || base == "Chat" {
+		return "Reasoning", nil
+	}
+	switch normalized {
+	case "claude", "claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "claude-sonnet4.6":
 		return "Claude_Sonnet_Reasoning", nil
-	case "gpt-5.2":
+	case "gpt-5.2", "gpt-5.2_chat", "gpt-5.2-chat":
 		return "Gpt_5_2_Reasoning", nil
 	case "gpt-5.3":
 		return "Gpt_5_3_Reasoning", nil
 	case "gpt-5.4":
 		return "Gpt_5_4_Reasoning", nil
-	case "gpt-5.5":
+	case "gpt-5.5", "gpt-5.5_chat", "gpt-5.5-chat":
 		return "Gpt_5_5_Reasoning", nil
 	case "gpt-5.6":
-		return "Gpt_5_5_Reasoning", nil
+		return "Gpt_5_6_Reasoning", nil
 	default:
 		return "Gpt_Reasoning", nil
 	}
@@ -186,6 +254,10 @@ func modelCatalog() []map[string]any {
 	models := configuredModelSpecs(currentSettings().ModelMappings)
 	out := make([]map[string]any, 0, len(models))
 	for _, m := range models {
+		id := strings.TrimSpace(m.ID)
+		if id == "" {
+			continue
+		}
 		// Keep capability fields both at the top level and under capabilities:
 		// different OpenAI-compatible clients inspect different locations.
 		features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
@@ -199,18 +271,22 @@ func modelCatalog() []map[string]any {
 			"vision": true, "modalities": modalities, "input_modalities": modalities,
 			"output_modalities": []string{"text"}, "supported_features": features,
 		}
-		displayName := m.DisplayName
+		displayName := strings.TrimSpace(m.DisplayName)
 		if displayName == "" {
-			displayName = m.ID
+			displayName = id
 		}
 		defaultReasoningLevel := m.DefaultReasoningLevel
 		if defaultReasoningLevel == "" {
 			defaultReasoningLevel = "medium"
 		}
+		owner := strings.TrimSpace(m.Owner)
+		if owner == "" {
+			owner = "microsoft-365"
+		}
 		out = append(out, map[string]any{
-			"id": m.ID, "slug": m.ID, "display_name": displayName, "description": "Microsoft 365 gateway model route.",
+			"id": id, "slug": id, "display_name": displayName, "description": "Microsoft 365 gateway model route.",
 			"base_instructions": gatewayCodexBaseInstructions, "model_messages": codexModelMessages(),
-			"default_reasoning_level": defaultReasoningLevel, "object": "model", "owned_by": m.Owner,
+			"default_reasoning_level": defaultReasoningLevel, "object": "model", "owned_by": owner,
 			"shell_type": "shell_command", "visibility": "list", "supported_in_api": true, "priority": 1,
 			"additional_speed_tiers": []string{}, "service_tiers": []any{},
 			"availability_nux": nil, "upgrade": nil, "include_skills_usage_instructions": false,
