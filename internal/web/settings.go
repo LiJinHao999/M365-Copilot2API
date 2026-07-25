@@ -21,7 +21,22 @@ type modelMapping struct {
 	DefaultReasoningLevel string `json:"defaultReasoningLevel"`
 }
 
+// defaultModelMappings is the seed / reset catalog shown in WebUI and used when
+// settings.json has no modelMappings yet. /v1/models is driven entirely by the
+// saved ModelMappings list — edit it in the admin UI, no image rebuild required.
 var defaultModelMappings = []modelMapping{
+	{PublicModel: "Copilot_自动", UpstreamTone: "Magic", DisplayName: "Copilot 自动", DefaultReasoningLevel: "medium"},
+	{PublicModel: "Copilot_快速答复", UpstreamTone: "Chat", DisplayName: "Copilot 快速答复", DefaultReasoningLevel: "low"},
+	{PublicModel: "Copilot_深度思考", UpstreamTone: "Reasoning", DisplayName: "Copilot 深度思考", DefaultReasoningLevel: "high"},
+	{PublicModel: "claude-sonnet-4-6", UpstreamTone: "Claude_Sonnet", DisplayName: "Claude Sonnet 4.6", DefaultReasoningLevel: "medium"},
+	{PublicModel: "claude-sonnet-4-5_Reasoning", UpstreamTone: "Claude_Sonnet_Reasoning", DisplayName: "Claude Sonnet Reasoning", DefaultReasoningLevel: "high"},
+	{PublicModel: "claude-fable-5", UpstreamTone: "Claude_Fable", DisplayName: "Claude Fable 5", DefaultReasoningLevel: "medium"},
+	{PublicModel: "gpt-5.6_Reasoning", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6 Reasoning", DefaultReasoningLevel: "high"},
+	{PublicModel: "gpt-5.5_Chat", UpstreamTone: "Gpt_5_5_Chat", DisplayName: "GPT-5.5 Chat", DefaultReasoningLevel: "low"},
+	{PublicModel: "gpt-5.5_Reasoning", UpstreamTone: "Gpt_5_5_Reasoning", DisplayName: "GPT-5.5 Reasoning", DefaultReasoningLevel: "high"},
+	{PublicModel: "gpt-5.2_Chat", UpstreamTone: "Gpt_5_2_Chat", DisplayName: "GPT-5.2 Chat", DefaultReasoningLevel: "low"},
+	{PublicModel: "gpt-5.2_Reasoning", UpstreamTone: "Gpt_5_2_Reasoning", DisplayName: "GPT-5.2 Reasoning", DefaultReasoningLevel: "high"},
+	// Optional Codex-friendly aliases kept as extras (same tones).
 	{PublicModel: "gpt-5.6-sol", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6-Sol", DefaultReasoningLevel: "low"},
 	{PublicModel: "gpt-5.6-terra", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6-Terra", DefaultReasoningLevel: "medium"},
 	{PublicModel: "gpt-5.6-luna", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6-Luna", DefaultReasoningLevel: "medium"},
@@ -30,11 +45,19 @@ var defaultModelMappings = []modelMapping{
 // Allow ASCII plus common CJK product labels (e.g. Copilot_自动) used as public IDs.
 var publicModelID = regexp.MustCompile(`^[\p{L}\p{N}._-]{1,128}$`)
 
+// Suggested public model IDs for the WebUI datalist (not a hard allowlist).
 var configurableCodexModels = []string{
-	"gpt-5.2",
-	"gpt-5.4",
-	"gpt-5.4-mini",
-	"gpt-5.5",
+	"Copilot_自动",
+	"Copilot_快速答复",
+	"Copilot_深度思考",
+	"claude-sonnet-4-6",
+	"claude-sonnet-4-5_Reasoning",
+	"claude-fable-5",
+	"gpt-5.6_Reasoning",
+	"gpt-5.5_Chat",
+	"gpt-5.5_Reasoning",
+	"gpt-5.2_Chat",
+	"gpt-5.2_Reasoning",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -107,10 +130,21 @@ func openSettingsStore() *settingsStore {
 		return sharedSettings
 	}
 	s := &settingsStore{path: settingsPath(), v: defaultRuntimeSettings()}
+	loadedFromDisk := false
 	if b, e := os.ReadFile(s.path); e == nil {
 		_ = json.Unmarshal(b, &s.v)
+		loadedFromDisk = true
 	}
 	s.v.ModelMappings = sanitizeModelMappings(s.v.ModelMappings)
+	// Empty catalog (fresh install or wiped rows) falls back to the product seed.
+	// Once the admin saves a custom list, that list is authoritative — including
+	// deletions — until they click “恢复默认映射” in the WebUI.
+	if len(s.v.ModelMappings) == 0 {
+		s.v.ModelMappings = append([]modelMapping(nil), defaultModelMappings...)
+		if loadedFromDisk {
+			_ = s.save(s.v)
+		}
+	}
 	_ = validateSettings(s.v)
 	sharedSettings = s
 	return s
@@ -249,7 +283,13 @@ func (s *settingsStore) save(v runtimeSettings) error {
 func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		jsonOut(w, map[string]any{"settings": s.settings.get(), "codexModels": configurableCodexModels, "upstreamTones": knownUpstreamTones(), "restartRequiredFields": []string{"listenAddress", "configPath", "tokenCachePath", "sessionCachePath", "outboundProxy", "proxyPool", "clientId", "authority", "redirectUri", "scope", "debugLogPath"}})
+		jsonOut(w, map[string]any{
+			"settings": s.settings.get(),
+			"codexModels": configurableCodexModels,
+			"upstreamTones": publicUpstreamTones(),
+			"defaultModelMappings": defaultModelMappings,
+			"restartRequiredFields": []string{"listenAddress", "configPath", "tokenCachePath", "sessionCachePath", "outboundProxy", "proxyPool", "clientId", "authority", "redirectUri", "scope", "debugLogPath"},
+		})
 	case http.MethodPut:
 		var v runtimeSettings
 		if json.NewDecoder(r.Body).Decode(&v) != nil {
@@ -264,7 +304,8 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, 400, "invalid_request_error", e.Error())
 			return
 		}
-		jsonOut(w, map[string]any{"ok": true, "settings": v})
+		// Return the sanitized view so the UI reflects what /v1/models will serve.
+		jsonOut(w, map[string]any{"ok": true, "settings": s.settings.get()})
 	default:
 		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
 	}

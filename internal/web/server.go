@@ -513,18 +513,46 @@ type responseFormat struct {
 	JSONSchema map[string]any `json:"json_schema,omitempty"`
 }
 
+var continuousModelSuffixes = []string{"-持续", "_持续", "-continuous", "_continuous", "-persist", "_persist"}
+
 // stripContinuousModelSuffix removes the "-持续" / "-continuous" session alias
 // suffix so persistent and one-shot model IDs share the same upstream tone.
 func stripContinuousModelSuffix(model string) string {
 	model = strings.TrimSpace(model)
 	lower := strings.ToLower(model)
-	for _, suffix := range []string{"-持续", "_持续", "-continuous", "_continuous", "-persist", "_persist"} {
+	for _, suffix := range continuousModelSuffixes {
 		ls := strings.ToLower(suffix)
 		if strings.HasSuffix(model, suffix) || strings.HasSuffix(lower, ls) {
 			return strings.TrimSpace(model[:len(model)-len(suffix)])
 		}
 	}
 	return model
+}
+
+func isContinuousModelAlias(model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	return stripContinuousModelSuffix(model) != model
+}
+
+// isRawUpstreamToneID reports ChatHub tone strings that should not appear as
+// public OpenAI model ids in /v1/models.
+func isRawUpstreamToneID(model string) bool {
+	switch strings.TrimSpace(model) {
+	case "Magic", "Chat", "Reasoning",
+		"Gpt_5_2_Chat", "Gpt_5_2_Reasoning",
+		"Gpt_5_3_Chat", "Gpt_5_3_Reasoning",
+		"Gpt_5_4_Chat", "Gpt_5_4_Reasoning",
+		"Gpt_5_5_Chat", "Gpt_5_5_Reasoning",
+		"Gpt_5_6_Reasoning",
+		"Gpt_Quick", "Gpt_Reasoning",
+		"Claude_Sonnet", "Claude_Sonnet_Reasoning", "Claude_Fable",
+		"magic":
+		return true
+	}
+	return false
 }
 
 func modelTone(model string) string {

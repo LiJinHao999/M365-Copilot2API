@@ -52,47 +52,26 @@ func codexModelMessages() map[string]any {
 	}
 }
 
-var gatewayModels = []modelSpec{
-	// Copilot product tones
-	{ID: "Copilot_自动", Owner: "microsoft-365", DisplayName: "Copilot 自动", Tools: true},
-	{ID: "Copilot_自动-持续", Owner: "microsoft-365", DisplayName: "Copilot 自动（持续）", Tools: true},
-	{ID: "Copilot_快速答复", Owner: "microsoft-365", DisplayName: "Copilot 快速答复", Tools: true},
-	{ID: "Copilot_快速答复-持续", Owner: "microsoft-365", DisplayName: "Copilot 快速答复（持续）", Tools: true},
-	{ID: "Copilot_深度思考", Owner: "microsoft-365", DisplayName: "Copilot 深度思考", Tools: true},
-	{ID: "Copilot_深度思考-持续", Owner: "microsoft-365", DisplayName: "Copilot 深度思考（持续）", Tools: true},
+// gatewayModels is retained only as a derived view of defaultModelMappings for
+// tests that still reference the symbol. The live /v1/models catalog is built
+// exclusively from settings.ModelMappings (WebUI-editable, hot-reloaded).
+var gatewayModels = func() []modelSpec {
+	out := make([]modelSpec, 0, len(defaultModelMappings))
+	for _, m := range defaultModelMappings {
+		out = append(out, modelSpec{
+			ID: m.PublicModel, Owner: modelOwnerForID(m.PublicModel),
+			DisplayName: m.DisplayName, DefaultReasoningLevel: m.DefaultReasoningLevel, Tools: true,
+		})
+	}
+	return out
+}()
 
-	// Claude via M365
-	{ID: "claude-sonnet-4-6", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet 4.6", Tools: true},
-	{ID: "claude-sonnet-4-6-持续", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet 4.6（持续）", Tools: true},
-	{ID: "claude-sonnet-4-5_Reasoning", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet Reasoning", Tools: true},
-	{ID: "claude-sonnet-4-5_Reasoning-持续", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Sonnet Reasoning（持续）", Tools: true},
-	{ID: "claude-fable-5", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Fable 5", Tools: true},
-	{ID: "claude-fable-5-持续", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Fable 5（持续）", Tools: true},
-
-	// GPT family (versioned public IDs)
-	{ID: "gpt-5.6_Reasoning", Owner: "microsoft-365", DisplayName: "GPT-5.6 Reasoning", Tools: true},
-	{ID: "gpt-5.6_Reasoning-持续", Owner: "microsoft-365", DisplayName: "GPT-5.6 Reasoning（持续）", Tools: true},
-	{ID: "gpt-5.5_Chat", Owner: "microsoft-365", DisplayName: "GPT-5.5 Chat", Tools: true},
-	{ID: "gpt-5.5_Chat-持续", Owner: "microsoft-365", DisplayName: "GPT-5.5 Chat（持续）", Tools: true},
-	{ID: "gpt-5.5_Reasoning", Owner: "microsoft-365", DisplayName: "GPT-5.5 Reasoning", Tools: true},
-	{ID: "gpt-5.5_Reasoning-持续", Owner: "microsoft-365", DisplayName: "GPT-5.5 Reasoning（持续）", Tools: true},
-	{ID: "gpt-5.2_Chat", Owner: "microsoft-365", DisplayName: "GPT-5.2 Chat", Tools: true},
-	{ID: "gpt-5.2_Chat-持续", Owner: "microsoft-365", DisplayName: "GPT-5.2 Chat（持续）", Tools: true},
-	{ID: "gpt-5.2_Reasoning", Owner: "microsoft-365", DisplayName: "GPT-5.2 Reasoning", Tools: true},
-	{ID: "gpt-5.2_Reasoning-持续", Owner: "microsoft-365", DisplayName: "GPT-5.2 Reasoning（持续）", Tools: true},
-
-	// Backward-compatible short aliases
-	{ID: "gpt-5.2", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.2-reasoning", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.3", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.4", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.4-reasoning", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.5", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.5-reasoning", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-5.6-reasoning", Owner: "microsoft-365", Tools: true},
-	{ID: "claude-sonnet", Owner: "anthropic-via-microsoft-365", Tools: true},
-	{ID: "claude-sonnet-reasoning", Owner: "anthropic-via-microsoft-365", Tools: true},
-	{ID: "claude-fable", Owner: "anthropic-via-microsoft-365", DisplayName: "Claude Fable", Tools: true},
+func modelOwnerForID(id string) string {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	if strings.Contains(lower, "claude") || strings.Contains(lower, "fable") {
+		return "anthropic-via-microsoft-365"
+	}
+	return "microsoft-365"
 }
 
 func validUpstreamTone(tone string) bool {
@@ -119,10 +98,23 @@ func knownUpstreamTones() []string {
 	}
 }
 
+// publicUpstreamTones is the WebUI dropdown list — no legacy lowercase noise.
+func publicUpstreamTones() []string {
+	out := make([]string, 0, len(knownUpstreamTones()))
+	for _, t := range knownUpstreamTones() {
+		if t == "magic" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 func configuredModelMapping(model string, mappings []modelMapping) (modelMapping, bool) {
-	model = strings.ToLower(strings.TrimSpace(model))
+	want := strings.ToLower(stripContinuousModelSuffix(strings.TrimSpace(model)))
 	for _, mapping := range mappings {
-		if strings.EqualFold(strings.TrimSpace(mapping.PublicModel), model) {
+		if strings.EqualFold(strings.TrimSpace(mapping.PublicModel), want) ||
+			strings.EqualFold(strings.TrimSpace(mapping.PublicModel), strings.TrimSpace(model)) {
 			return mapping, true
 		}
 	}
@@ -137,42 +129,40 @@ func configuredModelTone(model string, mappings []modelMapping) (string, bool) {
 	return mapping.UpstreamTone, true
 }
 
+// configuredModelSpecs builds the public catalog solely from saved mappings.
+// Hardcoded product IDs are no longer merged in — add/remove models via WebUI.
 func configuredModelSpecs(mappings []modelMapping) []modelSpec {
-	models := make([]modelSpec, 0, len(gatewayModels)+len(mappings))
-	for _, m := range gatewayModels {
-		id := strings.TrimSpace(m.ID)
-		if id == "" {
-			continue
-		}
-		m.ID = id
-		models = append(models, m)
+	if len(mappings) == 0 {
+		mappings = defaultModelMappings
 	}
+	models := make([]modelSpec, 0, len(mappings))
+	seen := map[string]struct{}{}
 	for _, mapping := range mappings {
 		id := strings.TrimSpace(mapping.PublicModel)
 		if id == "" {
-			// Empty public model IDs break OpenAI-compatible clients that assume
-			// every catalog entry has a non-empty id. Skip them instead of
-			// advertising a blank model.
 			continue
 		}
-		spec := modelSpec{
-			ID: id, Owner: "microsoft-365", Tools: true,
-			DisplayName: strings.TrimSpace(mapping.DisplayName), DefaultReasoningLevel: strings.TrimSpace(mapping.DefaultReasoningLevel),
+		// Keep /v1/models free of session aliases and raw ChatHub tones.
+		if isContinuousModelAlias(id) || isRawUpstreamToneID(id) {
+			continue
 		}
-		if spec.DisplayName == "" {
-			spec.DisplayName = id
+		key := strings.ToLower(id)
+		if _, ok := seen[key]; ok {
+			continue
 		}
-		replaced := false
-		for i := range models {
-			if strings.EqualFold(models[i].ID, spec.ID) {
-				models[i] = spec
-				replaced = true
-				break
-			}
+		seen[key] = struct{}{}
+		display := strings.TrimSpace(mapping.DisplayName)
+		if display == "" {
+			display = id
 		}
-		if !replaced {
-			models = append(models, spec)
+		level := strings.TrimSpace(mapping.DefaultReasoningLevel)
+		if level == "" {
+			level = "medium"
 		}
+		models = append(models, modelSpec{
+			ID: id, Owner: modelOwnerForID(id), Tools: true,
+			DisplayName: display, DefaultReasoningLevel: level,
+		})
 	}
 	return models
 }
@@ -213,6 +203,11 @@ func reasoningTone(model, effort string) (string, error) {
 		return "", err
 	}
 	if tone, ok := configuredModelTone(model, currentSettings().ModelMappings); ok {
+		// Saved mappings pin the base tone, but medium+ effort may still lift
+		// product auto/fast routes onto deep-think without a separate model id.
+		if (tone == "Magic" || tone == "Chat") && e != "" && e != "none" && e != "minimal" && e != "low" {
+			return "Reasoning", nil
+		}
 		return tone, nil
 	}
 	base := modelTone(model)

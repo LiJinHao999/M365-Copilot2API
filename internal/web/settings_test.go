@@ -67,6 +67,14 @@ func TestModelMappingsValidate(t *testing.T) {
 	if got := sanitizeModelMappings(v.ModelMappings); len(got) != 1 || got[0].PublicModel != "claude-fable-5" {
 		t.Fatalf("sanitize=%#v", got)
 	}
+	// Product seed must stay valid for WebUI reset.
+	if err := validateSettings(runtimeSettings{
+		MaxToolCallsPerTurn: 1, MaxToolRounds: 16, ContextWindow: 128000, MaxOutputTokens: 16384,
+		ChatTimeoutSeconds: 120, ImageTimeoutSeconds: 150, LogLevel: "info",
+		ModelMappings: append([]modelMapping(nil), defaultModelMappings...), ToolPlanningMode: "router",
+	}); err != nil {
+		t.Fatalf("default model mappings invalid: %v", err)
+	}
 }
 
 func TestOutboundProxySettingValidation(t *testing.T) {

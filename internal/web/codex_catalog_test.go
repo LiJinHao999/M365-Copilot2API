@@ -45,6 +45,10 @@ func TestModelsAdvertiseContextAndReasoning(t *testing.T) {
 		t.Fatalf("models alias length=%d, data length=%d", len(body.Models), len(body.Data))
 	}
 	for _, m := range body.Data {
+		id, _ := m["id"].(string)
+		if isContinuousModelAlias(id) || isRawUpstreamToneID(id) {
+			t.Fatalf("public catalog must not list continuous aliases or raw tones: %q", id)
+		}
 		baseInstructions, ok := m["base_instructions"].(string)
 		if !ok || baseInstructions == "" {
 			t.Fatalf("missing Codex base instructions: %#v", m)
@@ -138,9 +142,13 @@ func TestModelsAdvertiseContextAndReasoning(t *testing.T) {
 }
 
 func TestConfiguredModelMappingsDriveCatalogAndRouting(t *testing.T) {
-	mappings := []modelMapping{{PublicModel: "gpt-5.6-sol", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6-Sol", DefaultReasoningLevel: "low"}}
+	// Catalog is driven only by the provided mappings (WebUI source of truth).
+	mappings := []modelMapping{
+		{PublicModel: "gpt-5.6-sol", UpstreamTone: "Gpt_5_6_Reasoning", DisplayName: "GPT-5.6-Sol", DefaultReasoningLevel: "low"},
+		{PublicModel: "claude-fable-5", UpstreamTone: "Claude_Fable", DisplayName: "Claude Fable 5", DefaultReasoningLevel: "medium"},
+	}
 	models := configuredModelSpecs(mappings)
-	if len(models) != len(gatewayModels)+1 || models[len(models)-1].ID != "gpt-5.6-sol" || models[len(models)-1].DefaultReasoningLevel != "low" {
+	if len(models) != 2 || models[0].ID != "gpt-5.6-sol" || models[1].ID != "claude-fable-5" {
 		t.Fatalf("configured models=%#v", models)
 	}
 	mapping, ok := configuredModelMapping("GPT-5.6-SOL", mappings)
@@ -150,21 +158,19 @@ func TestConfiguredModelMappingsDriveCatalogAndRouting(t *testing.T) {
 	if tone, ok := configuredModelTone("gpt-5.6-sol", mappings); !ok || tone != "Gpt_5_6_Reasoning" {
 		t.Fatalf("tone=%q ok=%t", tone, ok)
 	}
-	override := configuredModelSpecs([]modelMapping{{PublicModel: "gpt-5.5", UpstreamTone: "Gpt_5_5_Reasoning", DisplayName: "GPT-5.5", DefaultReasoningLevel: "high"}})
-	if len(override) != len(gatewayModels) {
-		t.Fatalf("built-in override length=%d want=%d", len(override), len(gatewayModels))
+	// Continuous aliases and raw tones must not appear in the public catalog.
+	filtered := configuredModelSpecs([]modelMapping{
+		{PublicModel: "claude-fable-5-持续", UpstreamTone: "Claude_Fable", DisplayName: "Fable Cont", DefaultReasoningLevel: "medium"},
+		{PublicModel: "Claude_Fable", UpstreamTone: "Claude_Fable", DisplayName: "Raw Tone", DefaultReasoningLevel: "medium"},
+		{PublicModel: "my-custom-model", UpstreamTone: "Claude_Fable", DisplayName: "Custom", DefaultReasoningLevel: "medium"},
+	})
+	if len(filtered) != 1 || filtered[0].ID != "my-custom-model" {
+		t.Fatalf("filtered=%#v", filtered)
 	}
-	found := false
-	for _, m := range override {
-		if m.ID == "gpt-5.5" {
-			found = true
-			if m.DefaultReasoningLevel != "high" || m.DisplayName != "GPT-5.5" {
-				t.Fatalf("built-in override=%#v", m)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("gpt-5.5 override missing")
+	// Empty input falls back to the product seed list.
+	seeded := configuredModelSpecs(nil)
+	if len(seeded) != len(defaultModelMappings) {
+		t.Fatalf("seed len=%d want=%d", len(seeded), len(defaultModelMappings))
 	}
 }
 
@@ -174,17 +180,8 @@ func TestConfiguredModelSpecsSkipsEmptyPublicModel(t *testing.T) {
 		{PublicModel: "   ", UpstreamTone: "Claude_Fable", DisplayName: "bad2", DefaultReasoningLevel: "medium"},
 		{PublicModel: "claude-fable-custom", UpstreamTone: "Claude_Fable", DisplayName: "Fable Custom", DefaultReasoningLevel: "medium"},
 	})
-	if len(models) != len(gatewayModels)+1 {
-		t.Fatalf("len=%d want=%d models=%#v", len(models), len(gatewayModels)+1, models)
-	}
-	for _, m := range models {
-		if strings.TrimSpace(m.ID) == "" {
-			t.Fatalf("empty model id leaked: %#v", m)
-		}
-	}
-	last := models[len(models)-1]
-	if last.ID != "claude-fable-custom" {
-		t.Fatalf("last=%#v", last)
+	if len(models) != 1 || models[0].ID != "claude-fable-custom" {
+		t.Fatalf("models=%#v", models)
 	}
 }
 

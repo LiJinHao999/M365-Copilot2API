@@ -91,23 +91,25 @@ curl http://127.0.0.1:4141/v1/chat/completions \
 
 ## 🤖 可用模型
 
-对外 `model` 会映射到 ChatHub 上游 `tone`。带 `-持续` 后缀的 ID 与普通 ID 走同一 tone（便于会话客户端区分持续线程）。
+`/v1/models` **完全由管理台「模型映射」驱动**（写入 `settings.json` 的 `modelMappings`），保存后立即生效，**无需重建 Docker**。
 
-| 上游 tone | 模型 ID | 持续模型 ID | 说明 |
-|-----------|---------|-------------|------|
-| `Magic` | `Copilot_自动` | `Copilot_自动-持续` | Copilot 自动选模 |
-| `Chat` | `Copilot_快速答复` | `Copilot_快速答复-持续` | Copilot 快速答复 |
-| `Reasoning` | `Copilot_深度思考` | `Copilot_深度思考-持续` | Copilot 深度思考 |
-| `Claude_Sonnet` | `claude-sonnet-4-6` | `claude-sonnet-4-6-持续` | Claude Sonnet |
-| `Claude_Sonnet_Reasoning` | `claude-sonnet-4-5_Reasoning` | `claude-sonnet-4-5_Reasoning-持续` | Claude Sonnet 思考 |
-| `Claude_Fable` | `claude-fable-5` | `claude-fable-5-持续` | Claude Fable |
-| `Gpt_5_6_Reasoning` | `gpt-5.6_Reasoning` | `gpt-5.6_Reasoning-持续` | GPT 5.6 思考 |
-| `Gpt_5_5_Chat` | `gpt-5.5_Chat` | `gpt-5.5_Chat-持续` | GPT 5.5 快速 |
-| `Gpt_5_5_Reasoning` | `gpt-5.5_Reasoning` | `gpt-5.5_Reasoning-持续` | GPT 5.5 思考 |
-| `Gpt_5_2_Chat` | `gpt-5.2_Chat` | `gpt-5.2_Chat-持续` | GPT 5.2 快速 |
-| `Gpt_5_2_Reasoning` | `gpt-5.2_Reasoning` | `gpt-5.2_Reasoning-持续` | GPT 5.2 思考 |
+目录里只展示公开 **model ID**（不含上游 tone、不含 `-持续` 别名）。默认种子如下，可在 WebUI 增删改：
 
-仍兼容旧短名：`gpt-5.5`、`claude-sonnet`、`claude-fable`、`gpt-5.6-sol` 等。
+| 模型 ID | 说明 | 上游 tone |
+|---------|------|-----------|
+| `Copilot_自动` | Copilot 自动选模 | `Magic` |
+| `Copilot_快速答复` | Copilot 快速答复 | `Chat` |
+| `Copilot_深度思考` | Copilot 深度思考 | `Reasoning` |
+| `claude-sonnet-4-6` | Claude Sonnet | `Claude_Sonnet` |
+| `claude-sonnet-4-5_Reasoning` | Claude Sonnet 思考 | `Claude_Sonnet_Reasoning` |
+| `claude-fable-5` | Claude Fable | `Claude_Fable` |
+| `gpt-5.6_Reasoning` | GPT 5.6 思考 | `Gpt_5_6_Reasoning` |
+| `gpt-5.5_Chat` | GPT 5.5 快速 | `Gpt_5_5_Chat` |
+| `gpt-5.5_Reasoning` | GPT 5.5 思考 | `Gpt_5_5_Reasoning` |
+| `gpt-5.2_Chat` | GPT 5.2 快速 | `Gpt_5_2_Chat` |
+| `gpt-5.2_Reasoning` | GPT 5.2 思考 | `Gpt_5_2_Reasoning` |
+
+路由仍兼容旧短名 / `-持续` 后缀 / 直接传 tone，只是它们不会出现在 `/v1/models`。
 
 ## 🧩 MCP 协议
 

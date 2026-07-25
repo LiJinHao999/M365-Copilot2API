@@ -5,7 +5,8 @@ services:
     container_name: m365-native
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4141:4141"
+      # Bind all interfaces so LAN/other hosts can reach the gateway.
+      - "0.0.0.0:4141:4141"
     environment:
       M365_LISTEN: 0.0.0.0:4141
       M365_DATA_DIR: /data
