@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"m365-native/internal/chathub"
 	"strings"
 )
 
@@ -75,12 +76,15 @@ func modelOwnerForID(id string) string {
 }
 
 func validUpstreamTone(tone string) bool {
+	tone = strings.TrimSpace(tone)
 	for _, known := range knownUpstreamTones() {
 		if tone == known {
 			return true
 		}
 	}
-	return false
+	// Allow free-form custom tones (new ChatHub modes) so admins can map them
+	// from the WebUI without shipping a code change.
+	return chathub.ValidCustomToneID(tone)
 }
 
 func knownUpstreamTones() []string {

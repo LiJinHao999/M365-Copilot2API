@@ -44,9 +44,9 @@ func TestModelMappingsValidate(t *testing.T) {
 	if err := validateSettings(v); err != nil {
 		t.Fatal(err)
 	}
-	v.ModelMappings[0].UpstreamTone = "unknown"
+	v.ModelMappings[0].UpstreamTone = "bad tone!"
 	if err := validateSettings(v); err == nil {
-		t.Fatal("accepted unknown upstream tone")
+		t.Fatal("accepted invalid upstream tone")
 	}
 	v.ModelMappings[0].UpstreamTone = "Gpt_5_6_Reasoning"
 	v.ModelMappings = append(v.ModelMappings, v.ModelMappings[0])
@@ -74,6 +74,14 @@ func TestModelMappingsValidate(t *testing.T) {
 		ModelMappings: append([]modelMapping(nil), defaultModelMappings...), ToolPlanningMode: "router",
 	}); err != nil {
 		t.Fatalf("default model mappings invalid: %v", err)
+	}
+	// Custom free-form tone ids are allowed.
+	v.ModelMappings = []modelMapping{{
+		PublicModel: "my-opus", UpstreamTone: "Claude_Opus_Experimental",
+		DisplayName: "My Opus", DefaultReasoningLevel: "high",
+	}}
+	if err := validateSettings(v); err != nil {
+		t.Fatalf("custom tone should be accepted: %v", err)
 	}
 }
 

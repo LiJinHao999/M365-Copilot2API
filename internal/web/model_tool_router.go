@@ -16,7 +16,11 @@ Available tools: %s
 Mode: %s
 
 Rules:
-- If a tool is needed, respond with: CALL_TOOL: tool_name({"arg1":"value1"})
+- Prefer a fenced tool_call block:
+`+"```"+`tool_call
+{"name":"tool_name","arguments":{"arg1":"value1"}}
+`+"```"+`
+- Legacy formats also accepted: CALL_TOOL: tool_name({"arg1":"value1"}) or {"calls":[{"name":"...","arguments":{...}}]}
 - If no tool is needed, respond with: NO_TOOL_NEEDED
 - Only use tools from the available list above
 - Validate all arguments against the tool's schema
@@ -28,6 +32,11 @@ User request and evidence:
 
 func parseModelToolDecision(text string, tools []map[string]any, choice any) ([]detectedToolCall, bool) {
 	text = strings.TrimSpace(text)
+	// Ciallo-compatible unified fence first.
+	if calls := fencedToolCalls(text, tools, choice); len(calls) > 0 {
+		// fencedToolCalls also matches per-name fences; treat as a successful parse.
+		return calls, true
+	}
 	// Try the new natural language format first: CALL_TOOL: name({...})
 	if strings.HasPrefix(text, "CALL_TOOL:") || strings.HasPrefix(text, "call_tool:") {
 		parts := strings.SplitN(text, ":", 2)

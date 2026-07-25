@@ -244,8 +244,9 @@ func validateSettings(v runtimeSettings) error {
 		if tone == "" {
 			return fmt.Errorf("公开模型 %q 缺少上游 tone", model)
 		}
+		// Built-in catalog OR free-form custom ChatHub tone ids are accepted.
 		if !validUpstreamTone(tone) {
-			return fmt.Errorf("上游 tone %q 不受支持", tone)
+			return fmt.Errorf("上游 tone %q 无效：请使用已知 tone 或自定义标识（字母/数字/_-., 1-128）", tone)
 		}
 		if strings.TrimSpace(mapping.DisplayName) == "" {
 			return fmt.Errorf("公开模型 %q 缺少显示名称", model)

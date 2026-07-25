@@ -657,7 +657,7 @@ func chatPayload(text, sessionID, conversationID, requestID, tone string, firstT
 				"streamingMode": "ConciseWithPadding",
 				"message":       message,
 
-				"plugins":    clientPlugins(tools, mcpServerURL),
+				"plugins":    clientPlugins(tools, mcpServerURL, text),
 				"toolChoice": toolChoice,
 			},
 		},
